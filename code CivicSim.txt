@@ -1,0 +1,551 @@
+
+import React, { useState } from "react";
+
+// Camps et PNJ
+const camps = ["Extrême-Droite", "Droite", "Centre", "Gauche", "Extrême-Gauche", "Populiste", "Technocrate"];
+const PNJ = [
+  { nom: "Militant", pop: 3, elo: 4, res: 2, fin: 1, deb: 2, scan: 0 },
+  { nom: "Figure sur les Réseaux Sociaux", pop: 5, elo: 3, res: 1, fin: 3, deb: 1, scan: 0 },
+  { nom: "Candidat Local", pop: 6, elo: 5, res: 6, fin: 5, deb: 4, scan: 0 },
+  { nom: "Député", pop: 6, elo: 7, res: 5, fin: 5, deb: 4, scan: 0 },
+  { nom: "Candidat à la présidentielle", pop: 7, elo: 8, res: 7, fin: 4, deb: 8, scan: 0 }
+];
+
+// Thèmes de lois
+const themes = [
+  { nom: "Souveraineté/Sécurité", coeff: { "Extrême-Droite": 1.3, "Droite": 1.15, "Centre": 1, "Gauche": 0.83, "Extrême-Gauche": 0.7 } },
+  { nom: "Économie/Fiscalité", coeff: { "Extrême-Droite": 1.3, "Droite": 1.15, "Centre": 1, "Gauche": 0.83, "Extrême-Gauche": 0.7 } },
+  { nom: "Écologie, Santé, Social", coeff: { "Extrême-Droite": 0.7, "Droite": 0.83, "Centre": 1, "Gauche": 1.15, "Extrême-Gauche": 1.3 } },
+  { nom: "Patrimoine, Culture, Éducation", coeff: { "Extrême-Droite": 1.15, "Droite": 1.3, "Centre": 1, "Gauche": 1.15, "Extrême-Gauche": 0.83 } },
+  { nom: "Institutions/Libertés", coeff: { "Extrême-Droite": 1, "Droite": 1, "Centre": 1, "Gauche": 1.15, "Extrême-Gauche": 1.15 } },
+  { nom: "Défense, Diplomatie, Technologie militaire", coeff: { "Extrême-Droite": 1.35, "Droite": 1.35, "Centre": 1, "Gauche": 0.83, "Extrême-Gauche": 0.83 } }
+];
+
+const mandatsLabels = ["Aucun", "Maire", "Député", "Ministre", "Président"];
+
+function rollDice(n) {
+  return Array.from({ length: n }, () => Math.ceil(Math.random() * 6));
+}
+
+function checkEventSuccess(percent, n) {
+  let rolls = rollDice(n);
+  let sum = rolls.reduce((a, b) => a + b, 0);
+  let win = false;
+  if (percent < 40) win = rolls.includes(6);
+  else if (percent < 60) win = rolls.filter(r => r === 6).length >= 2;
+  else if (percent < 80) win = sum > 6;
+  else if (percent < 95) win = sum > 6;
+  else win = sum > 8;
+  return { win, rolls, sum };
+}
+
+// Événements, conditions, conséquences
+const eventList = [
+  // 1- Jeune
+  {
+    key: "structureJeune",
+    name: "Intégration dans une structure politique jeune",
+    condition: char => !char.structureJeune,
+    auto: true,
+    success: char => ({ ...char, elo: char.elo + 1, res: char.res + 1, structureJeune: true }),
+    fail: char => char
+  },
+  {
+    key: "debatInterne",
+    name: "Débat interne",
+    condition: char => char.age >= 18 && char.age < 21,
+    auto: false,
+    conds: { age: 18 },
+    success: char => ({ ...char, deb: char.deb + 1 }),
+    fail: char => char
+  },
+  {
+    key: "debatMilitant",
+    name: "Débat avec des militants d'autres camps",
+    condition: char => char.deb > 2,
+    auto: false,
+    conds: { deb: 2 },
+    success: char => ({ ...char, deb: char.deb + 1, pop: char.pop + 1, res: char.res + 1 }),
+    fail: char => ({ ...char, scan: char.scan + 1, pop: Math.max(char.pop - 1, 0), elo: Math.max(char.elo - 1, 0) })
+  },
+  // 2- Militant
+  {
+    key: "tourMilitant",
+    name: "Tour de France du militant",
+    condition: char => char.debMilitantGagnes >= 3 && char.res > 3 && char.pop > 3 && char.fin > 2,
+    auto: false,
+    conds: { res: 3, pop: 3, fin: 2 },
+    success: char => ({ ...char, res: char.res + 2, pop: char.pop + 2, fin: Math.max(char.fin - 1, 0) }),
+    fail: char => ({ ...char, fin: Math.max(char.fin - 1, 0) })
+  },
+  {
+    key: "collecte",
+    name: "Collecte",
+    condition: char => char.debMilitantGagnes >= 3 && char.res > 3 && char.pop > 3 && char.fin < 2,
+    auto: false,
+    conds: { res: 3, pop: 3 },
+    success: char => ({ ...char, fin: char.fin + 1 }),
+    fail: char => ({ ...char, pop: Math.max(char.pop - 1, 0) })
+  },
+  // 3- Maire
+  {
+    key: "rencontreAdmin",
+    name: "Rencontre avec les administrés (maire)",
+    condition: char => char.mandat === 1 && char.pop > 4 && char.elo > 5,
+    auto: false,
+    conds: { pop: 4, elo: 5 },
+    success: char => ({ ...char, elo: char.elo + 1, fin: char.fin + 1, pop: char.pop + 1 }),
+    fail: char => ({ ...char, pop: Math.max(char.pop - 1, 0), fin: Math.max(char.fin - 1, 0) })
+  },
+  {
+    key: "reformeLocale",
+    name: "Réforme locale",
+    condition: char => char.mandat === 1 && char.scan < 3 && char.pop > 4 && char.elo > 3,
+    auto: false,
+    conds: { scan: 0, pop: 4, elo: 3 },
+    success: char => ({ ...char, pop: char.pop + 1, elo: char.elo + 1 }),
+    fail: char => ({ ...char, scan: char.scan + 1, elo: Math.max(char.elo - 1, 0), pop: Math.max(char.pop - 1, 0) })
+  },
+  // 4- Député
+  {
+    key: "rencontreAdminDep",
+    name: "Rencontre avec les administrés (député)",
+    condition: char => char.mandat === 2 && char.pop > 4 && char.elo > 5,
+    auto: false,
+    conds: { pop: 4, elo: 5 },
+    success: char => ({ ...char, elo: char.elo + 1, fin: char.fin + 1, pop: char.pop + 1 }),
+    fail: char => ({ ...char, pop: Math.max(char.pop - 1, 0), fin: Math.max(char.fin - 1, 0) })
+  },
+  {
+    key: "primaires",
+    name: "Organiser des primaires internes",
+    condition: char => char.mandat === 2 && char.pop + char.elo > 15 && char.res > 5,
+    auto: false,
+    conds: { pop: 8, elo: 7, res: 5 },
+    success: char => ({ ...char, deb: char.deb + 1, elo: char.elo + 1, res: char.res + 1, pop: char.pop + 1 }),
+    fail: char => ({
+      ...char,
+      elo: Math.max(char.elo - 1, 0),
+      pop: Math.max(char.pop - 1, 0),
+      res: Math.max(char.res - 1, 0),
+      deb: Math.max(char.deb - 1, 0)
+    })
+  },
+  // 5- Député ou Maire
+  {
+    key: "debatOppositionLocale",
+    name: "Débat avec une figure de l'opposition locale",
+    condition: char => (char.mandat === 1 || char.mandat === 2) && char.deb > 4,
+    auto: false,
+    conds: { deb: 4 },
+    success: char => ({ ...char, deb: char.deb + 1, res: char.res + 1, pop: char.pop + 1 }),
+    fail: char => ({ ...char, scan: char.scan + 1, deb: Math.max(char.deb - 1, 0) })
+  },
+  // 6- Député ou Ministre ou Président
+  {
+    key: "projetLoi",
+    name: "Déposer un projet de loi",
+    condition: char => (char.mandat >= 2 && char.mandat <= 4) && char.res > 7 && char.elo > 6,
+    auto: false,
+    conds: { res: 7, elo: 6 },
+    success: char => ({ ...char, pop: char.pop + 1, elo: char.elo + 1, projetLoi: true }),
+    fail: char => ({
+      ...char,
+      scan: char.scan + 1,
+      elo: Math.max(char.elo - 1, 0),
+      pop: Math.max(char.pop - 1, 0),
+      res: Math.max(char.res - 1, 0)
+    })
+  },
+  {
+    key: "oppositionAdverse",
+    name: "Opposition à une Figure adverse",
+    condition: char => (char.mandat >= 2 && char.mandat <= 4) && char.res > 2 && char.elo > 4 && char.deb > 4 && char.pop > 7,
+    auto: false,
+    conds: { res: 2, elo: 4, deb: 4, pop: 7 },
+    success: char => ({ ...char, pop: char.pop + 1, deb: char.deb + 1 }),
+    fail: char => ({ ...char, scan: char.scan + 1, pop: Math.max(char.pop - 1, 0) })
+  },
+  // 7- Ministre ou Président
+  {
+    key: "reformeNationale",
+    name: "Réforme Nationale",
+    condition: char => (char.mandat === 3 || char.mandat === 4) && char.elo > 5 && char.deb > 5 && char.res > 3,
+    auto: false,
+    conds: { elo: 5, deb: 5, res: 3 },
+    success: char => ({ ...char, pop: char.pop + 2, elo: char.elo + 3 }),
+    fail: char => char
+  },
+  {
+    key: "visiteDiplomatique",
+    name: "Visite diplomatique",
+    condition: char => (char.mandat === 3 || char.mandat === 4) && char.res > 7,
+    auto: false,
+    conds: { res: 7 },
+    success: char => ({ ...char, pop: char.pop + 2, res: char.res + 2 }),
+    fail: char => ({
+      ...char,
+      pop: Math.max(char.pop - 1, 0),
+      res: Math.max(char.res - 1, 0),
+      elo: Math.max(char.elo - 1, 0)
+    })
+  },
+  // 8- Tous
+  {
+    key: "tvRegionale",
+    name: "Passage à la TV Régionale",
+    condition: char => char.elo > 6 && char.res > 4 && char.pop > 5,
+    auto: false,
+    conds: { elo: 6, res: 4, pop: 5 },
+    success: char => ({ ...char, pop: char.pop + 1, fin: char.fin + 1 }),
+    fail: char => ({
+      ...char,
+      pop: Math.max(char.pop - 1, 0),
+      deb: Math.max(char.deb - 1, 0),
+      elo: Math.max(char.elo - 1, 0)
+    })
+  },
+  {
+    key: "scandaleDiffuse",
+    name: "Scandale diffusé sur les Réseaux Sociaux par vous",
+    condition: char => char.scan < 2,
+    auto: false,
+    conds: { scan: 0 },
+    success: char => ({ ...char, pop: char.pop + 1, elo: char.elo + 1, fin: char.fin + 1 }),
+    fail: char => ({
+      ...char,
+      pop: Math.max(char.pop - 1, 0),
+      elo: Math.max(char.elo - 1, 0),
+      res: Math.max(char.res - 1, 0)
+    })
+  },
+  {
+    key: "scandaleContre",
+    name: "Scandale contre vous (automatique)",
+    condition: char => char.scan > 2,
+    auto: true,
+    success: char => ({
+      ...char,
+      scan: char.scan + 1,
+      pop: Math.max(char.pop - 2, 0)
+    }),
+    fail: char => ({
+      ...char,
+      scan: char.scan + 2,
+      pop: Math.max(char.pop - 2, 0),
+      res: Math.max(char.res - 2, 0),
+      elo: Math.max(char.elo - 2, 0),
+      deb: Math.max(char.deb - 1, 0)
+    })
+  },
+  {
+    key: "tribuneJournal",
+    name: "Tribune dans un journal",
+    condition: char => char.pop > 2,
+    auto: false,
+    conds: { pop: 2 },
+    success: char => ({ ...char, pop: char.pop + 1, elo: char.elo + 1, res: char.res + 1 }),
+    fail: char => ({
+      ...char,
+      pop: Math.max(char.pop - 1, 0),
+      elo: Math.max(char.elo - 1, 0)
+    })
+  },
+  {
+    key: "meeting",
+    name: "Meeting",
+    condition: char => char.pop > 6 && char.mandat > 1 && char.elo > 3,
+    auto: false,
+    conds: { pop: 6, mandat: 2, elo: 3 },
+    success: char => ({ ...char, pop: char.pop + 2, elo: char.elo + 2, fin: char.fin + 2, res: char.res + 1 }),
+    fail: char => ({
+      ...char,
+      pop: Math.max(char.pop - 1, 0),
+      elo: Math.max(char.elo - 1, 0)
+    })
+  }
+];
+
+// Elections
+function isElection(year, age, type) {
+  const currentYear = 2025 + Math.floor((age - 18) / 2);
+  if (type === "presidentielle") return currentYear === year && (currentYear - 2027) % 5 === 0;
+  if (type === "municipale") return currentYear === year && (currentYear - 2026) % 6 === 0;
+  if (type === "legislative") return currentYear === year && (currentYear - 2029) % 5 === 0;
+  return false;
+}
+function electionCompetence(char) {
+  return char.pop * 2 + char.res * 2 + char.fin * 1.5 + char.elo * 1.5 + char.deb - char.scan;
+}
+function electionPNJ(type) {
+  if (type === "presidentielle") return PNJ[4];
+  if (type === "municipale") return PNJ[2];
+  if (type === "legislative") return PNJ[3];
+  return PNJ[0];
+}
+
+// Débats
+function debatCompetence(char) {
+  return char.pop * 2 + char.elo * 2 + char.res * 1.5 + char.deb * 2 - char.scan;
+}
+function debatPNJ(index) {
+  return PNJ[index];
+}
+function debatRewards(diff) {
+  const n = diff >= 5 ? 4 : diff >= 3 ? 3 : diff >= 1 ? 2 : 1;
+  const req = diff >= 5 ? 12 : 5;
+  return { n, req, gain: 1 + (5 - Math.max(diff, 0)) };
+}
+
+// Lois
+function loiScore(char, themeObj) {
+  const coeff = themeObj.coeff[char.camp] || 1;
+  return Math.round((char.res + char.elo + char.pop + char.fin - char.scan) * coeff);
+}
+function loiSeuil(type) {
+  if (type === "Régional") return 12;
+  if (type === "National") return 14;
+  if (type === "Institutionnelle") return 16;
+  if (type === "Constitutionnelle") return 18;
+  return 0;
+}
+
+// Composants
+
+function Creation({ onCreate }) {
+  const [nom, setNom] = useState("");
+  const [prenom, setPrenom] = useState("");
+  const [camp, setCamp] = useState(camps[0]);
+  return (
+    <div className="box">
+      <h2>Création de ton personnage</h2>
+      <label>Nom : <input value={nom} onChange={e => setNom(e.target.value)} /></label>
+      <label>Prénom : <input value={prenom} onChange={e => setPrenom(e.target.value)} /></label>
+      <label>Camp :
+        <select value={camp} onChange={e => setCamp(e.target.value)}>
+          {camps.map(c => <option key={c}>{c}</option>)}
+        </select>
+      </label>
+      <button
+        onClick={() => nom && prenom && onCreate({
+          nom, prenom, camp,
+          age: 18, pop: 2, elo: 2, res: 1, fin: 1, deb: 0, scan: 0, mandat: 0,
+          structureJeune: false, debMilitantGagnes: 0, projetLoi: false, history: []
+        })}
+      >Valider</button>
+    </div>
+  );
+}
+
+function StatBlock({ char }) {
+  return (
+    <div className="box">
+      <h2>{char.prenom} {char.nom} ({char.camp})</h2>
+      <ul>
+        <li>Âge : {char.age} ans</li>
+        <li>Popularité : {char.pop}/10</li>
+        <li>Éloquence : {char.elo}/10</li>
+        <li>Réseau : {char.res}/10</li>
+        <li>Financement : {char.fin}/10</li>
+        <li>Débats gagnés : {char.deb}/10</li>
+        <li>Scandales : {char.scan}/10</li>
+        <li>Mandat : {mandatsLabels[char.mandat]}</li>
+      </ul>
+    </div>
+  );
+}
+
+function Game({ char, setChar }) {
+  const [msg, setMsg] = useState("");
+  const [eventMsg, setEventMsg] = useState("");
+  const [selectedPNJ, setSelectedPNJ] = useState(null);
+  const [debatsEnCours, setDebatsEnCours] = useState(false);
+  const [selectedTheme, setSelectedTheme] = useState(null);
+  const [selectedLoiType, setSelectedLoiType] = useState("National");
+
+  // Événements débloqués
+  const debMilitantGagnes = char.debMilitantGagnes;
+  const availableEvents = eventList.filter(ev => ev.condition({ ...char, debMilitantGagnes }));
+
+  // Traitement d'un événement
+  function doEvent(ev) {
+    setEventMsg("");
+    if (ev.auto) {
+      const newChar = ev.success(char);
+      setChar({ ...newChar, history: [...char.history, { age: char.age, event: ev.name, result: "Succès" }] });
+      setEventMsg("Événement automatique réussi !");
+      return;
+    }
+    // Calcul taux réussite
+    let percent = 100;
+    if (ev.conds) {
+      let score = 0, total = 0;
+      for (let k in ev.conds) {
+        score += char[k];
+        total += ev.conds[k];
+      }
+      percent = Math.round((score / total) * 100);
+    }
+    let nbDice = percent < 40 ? 1 : percent < 60 ? 2 : percent < 80 ? 3 : percent < 95 ? 4 : 5;
+    const { win, rolls } = checkEventSuccess(percent, nbDice);
+    if (win) {
+      let newChar = ev.success(char);
+      if (ev.key === "debatMilitant") newChar.debMilitantGagnes = (char.debMilitantGagnes || 0) + 1;
+      setChar({ ...newChar, history: [...char.history, { age: char.age, event: ev.name, result: "Succès", rolls }] });
+      setEventMsg(`Succès ! Dé(s): ${rolls.join(", ")}`);
+    } else {
+      let newChar = ev.fail(char);
+      setChar({ ...newChar, history: [...char.history, { age: char.age, event: ev.name, result: "Échec", rolls }] });
+      setEventMsg(`Échec... Dé(s): ${rolls.join(", ")}`);
+    }
+  }
+
+  // Débat spécial
+  function handleDebat(pnjIdx) {
+    setDebatsEnCours(false);
+    const compPerso = debatCompetence(char);
+    const compPNJ = debatCompetence(debatPNJ(pnjIdx));
+    const diff = compPerso - compPNJ;
+    let n = 1, req = 4, gain = 5;
+    if (diff >= 5) { n = 4; req = 12; gain = 1; }
+    else if (diff >= 3) { n = 3; req = 5; gain = 2; }
+    else if (diff >= 1) { n = 2; req = 5; gain = 3; }
+    let rolls = rollDice(n);
+    let sum = rolls.reduce((a, b) => a + b, 0);
+    let win = false;
+    if (diff >= 5) win = sum >= req;
+    else if (diff >= 3) win = sum > req;
+    else if (diff >= 1) win = sum > req;
+    else win = [4, 5, 6].includes(rolls[0]);
+    let popWin = Math.max(1, gain);
+    if (win) {
+      setChar({
+        ...char,
+        pop: char.pop + popWin,
+        elo: char.elo + popWin,
+        history: [...char.history, { age: char.age, event: "Débat gagné contre " + PNJ[pnjIdx].nom, result: "Succès", rolls }]
+      });
+      setMsg(`Débat gagné ! Gains : +${popWin} Pop, +${popWin} Éloquence. [Dé(s): ${rolls.join(", ")}]`);
+    } else {
+      setChar({
+        ...char,
+        pop: Math.max(char.pop - popWin, 0),
+        elo: Math.max(char.elo - popWin, 0),
+        history: [...char.history, { age: char.age, event: "Débat perdu contre " + PNJ[pnjIdx].nom, result: "Échec", rolls }]
+      });
+      setMsg(`Débat perdu... Pertes : -${popWin} Pop, -${popWin} Éloquence. [Dé(s): ${rolls.join(", ")}]`);
+    }
+  }
+
+  // Élection
+  function handleElection(type) {
+    const compPerso = electionCompetence(char);
+    const compPNJ = electionCompetence(electionPNJ(type));
+    const diff = compPerso - compPNJ;
+    let n = 1, req = 3;
+    if (diff >= 8) { n = 4; req = 6; }
+    else if (diff >= 4) { n = 3; req = 5; }
+    else if (diff >= 1) { n = 2; req = 6; }
+    let rolls = rollDice(n);
+    let sum = rolls.reduce((a, b) => a + b, 0);
+    let win = false;
+    if (diff >= 8) win = sum > req;
+    else if (diff >= 4) win = sum > req;
+    else if (diff >= 1) win = sum > req;
+    else win = [3, 4, 5].includes(rolls[0]);
+    let newMandat = char.mandat;
+    let popPlus = diff >= 1 ? 1 : 0;
+    let resPlus = (diff >= 4 ? 1 : 0);
+    if (win) {
+      if (type === "presidentielle") newMandat = 4;
+      else if (type === "municipale") newMandat = 1;
+      else if (type === "legislative") newMandat = 2;
+      setChar({
+        ...char,
+        mandat: newMandat,
+        pop: char.pop + popPlus,
+        res: char.res + resPlus,
+        history: [...char.history, { age: char.age, event: "Élection " + type, result: "Succès", rolls }]
+      });
+      setMsg(`Élection remportée ! Nouveau mandat : ${mandatsLabels[newMandat]}. [Dé(s): ${rolls.join(", ")}]`);
+    } else {
+      setChar({
+        ...char,
+        history: [...char.history, { age: char.age, event: "Élection " + type, result: "Échec", rolls }]
+      });
+      setMsg(`Élection perdue... [Dé(s): ${rolls.join(", ")}]`);
+    }
+  }
+
+  // Déposer projet de Loi
+  function handleLoi() {
+    if (!selectedTheme) return setMsg("Choisis un thème !");
+    const score = loiScore(char, selectedTheme);
+    const seuil = loiSeuil(selectedLoiType);
+    if (score >= seuil) {
+      const popBonus = Math.floor(score / 10);
+      setChar({
+        ...char,
+        pop: char.pop + popBonus,
+        projetLoi: false,
+        history: [...char.history, { age: char.age, event: `Loi ${selectedTheme.nom} promulguée`, result: "Succès", score }]
+      });
+      setMsg(`Loi promulguée ! Score ${score}, bonus Popularité +${popBonus}`);
+    } else {
+      setChar({
+        ...char,
+        projetLoi: false,
+        history: [...char.history, { age: char.age, event: `Loi ${selectedTheme.nom} échouée`, result: "Échec", score }]
+      });
+      setMsg(`Loi refusée... Score ${score}, seuil ${seuil}`);
+    }
+    setSelectedTheme(null);
+  }
+
+  // Tour suivant
+  function nextTurn() {
+    setChar({ ...char, age: +(char.age + 0.5).toFixed(1) });
+    setMsg(""); setEventMsg("");
+  }
+
+  return (
+    <div>
+      <StatBlock char={char} />
+
+      <div className="box">
+        <h2>Événements débloqués</h2>
+        {availableEvents.length === 0 && <div>Aucun événement disponible</div>}
+        <ul>
+          {availableEvents.map(ev => (
+            <li key={ev.key}>
+              <button onClick={() => doEvent(ev)}>{ev.name}</button>
+            </li>
+          ))}
+        </ul>
+        {eventMsg && <div style={{ color: "green", marginTop: "1em" }}>{eventMsg}</div>}
+      </div>
+
+      <div className="box">
+        <h2>Actions spéciales</h2>
+        {/* Débats */}
+        <div>
+          <b>Débat (si Débats >2):</b>
+          {char.deb > 2 &&
+            <div>
+              {PNJ.map((p, idx) => (
+                <button key={p.nom} onClick={() => handleDebat(idx)}>
+                  Débattre contre {p.nom}
+                </button>
+              ))}
+            </div>
+          }
+        </div>
+        {/* Élections */}
+        <div style={{ marginTop: "1em" }}>
+          <b>Élections :</b>
+          {isElection(2027, char.age, "presidentielle") &&
+            <button onClick={() => handleElection("presidentielle")}>Présidentielle</button>}
+          {isElection(2026, char.age, "municipale") &&
+            <button onClick={() => handleElection("municipale")}>Municipale</button>}
+          {isElection(2029, char.age, "legislative") &&
+            <button onClick={() => handleElection("legislative")}>Législative</button>}
